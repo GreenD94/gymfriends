@@ -1,0 +1,76 @@
+/* Customer Theme - Trust-building blues and greens */
+:root[data-theme="customer"] {
+  --primary: #3B82F6; /* Blue */
+  --primary-dark: #2563EB;
+  --primary-light: #60A5FA;
+  --secondary: #10B981; /* Green */
+  --secondary-dark: #059669;
+  --secondary-light: #34D399;
+  --accent: #06B6D4; /* Cyan */
+  --background: #F0F9FF;
+  --surface: #FFFFFF;
+  --text: #1F2937;
+  --text-muted: #6B7280;
+  --border: #E5E7EB;
+  --success: #10B981;
+  --warning: #F59E0B;
+  --error: #EF4444;
+}
+
+/* Trainer Theme - Energetic oranges and reds */
+:root[data-theme="trainer"] {
+  --primary: #F97316; /* Orange */
+  --primary-dark: #EA580C;
+  --primary-light: #FB923C;
+  --secondary: #EF4444; /* Red */
+  --secondary-dark: #DC2626;
+  --secondary-light: #F87171;
+  --accent: #F59E0B; /* Amber */
+  --background: #FFF7ED;
+  --surface: #FFFFFF;
+  --text: #1F2937;
+  --text-muted: #6B7280;
+  --border: #FED7AA;
+  --success: #10B981;
+  --warning: #F59E0B;
+  --error: #EF4444;
+}
+
+/* Admin Theme - Professional purples and deep blues */
+:root[data-theme="admin"] {
+  --primary: #7C3AED; /* Purple */
+  --primary-dark: #6D28D9;
+  --primary-light: #A78BFA;
+  --secondary: #1E40AF; /* Deep Blue */
+  --secondary-dark: #1E3A8A;
+  --secondary-light: #3B82F6;
+  --accent: #8B5CF6; /* Violet */
+  --background: #F5F3FF;
+  --surface: #FFFFFF;
+  --text: #1F2937;
+  --text-muted: #6B7280;
+  --border: #DDD6FE;
+  --success: #10B981;
+  --warning: #F59E0B;
+  --error: #EF4444;
+}
+
+/* Master Theme - Gradient combining all themes */
+:root[data-theme="master"] {
+  --primary: #7C3AED; /* Purple */
+  --primary-dark: #6D28D9;
+  --primary-light: #A78BFA;
+  --secondary: #3B82F6; /* Blue */
+  --secondary-dark: #2563EB;
+  --secondary-light: #60A5FA;
+  --accent: #F97316; /* Orange */
+  --background: #FAFAFA;
+  --surface: #FFFFFF;
+  --text: #1F2937;
+  --text-muted: #6B7280;
+  --border: #E5E7EB;
+  --success: #10B981;
+  --warning: #F59E0B;
+  --error: #EF4444;
+}
+
