@@ -197,6 +197,55 @@ const { data, isLoading, error } = useQuery({
 - Query keys should be descriptive and hierarchical
 - Always handle errors from `mutation.error` or `query.error`
 
+### Single Entity Retrieval Pattern
+
+**Rule**: When fetching a single entity by ID, use the list action with ID filtering instead of creating separate get actions. This applies to all entities (users, subscriptions, exercises, etc.).
+
+**Rationale**:
+- Reduces code duplication
+- Maintains consistency across all entities
+- Single action handles both list and single entity retrieval
+- Easier to maintain and extend
+
+**Bad Example:**
+```typescript
+// ❌ Separate get action
+export async function getUserAction(id: string) {
+  // ... fetch single user
+}
+
+// ❌ Separate hook
+export function useUser(userId: string) {
+  return useQuery({
+    queryFn: () => getUserAction(userId),
+  });
+}
+```
+
+**Good Example:**
+```typescript
+// ✅ List action with optional ID filter
+export async function listUsersAction(page?: number, limit?: number, userId?: string) {
+  const query: Record<string, unknown> = {};
+  if (userId) {
+    query._id = toObjectId(userId);
+  }
+  // ... fetch users with query
+}
+
+// ✅ Use list action with ID filter
+const { users } = useUsersList({ userId: '123' });
+const user = users?.[0];
+```
+
+**Implementation Pattern**:
+1. List actions accept optional ID parameter: `listEntityAction(page?, limit?, entityId?)`
+2. When `entityId` is provided, filter query by `_id: toObjectId(entityId)`
+3. Hooks use list hooks with ID filter: `useEntityList({ entityId: '123' })`
+4. Extract first item from array: `const entity = entities?.[0]`
+
+**Location**: All entity actions in `features/core/server-actions/[entity]/[entity]-actions.ts`
+
 ### Role-Based Configuration
 
 **Rule**: All role-based mappings (routes, redirects, URLs) must be centralized in `features/core/config/role.config.ts`. Never hardcode role-to-route mappings in components or middleware.

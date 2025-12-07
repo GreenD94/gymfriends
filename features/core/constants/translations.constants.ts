@@ -37,6 +37,13 @@ export const TRANSLATIONS = {
     loginError: 'Error al iniciar sesión',
     registerError: 'Error al registrarse',
     genericError: 'Ocurrió un error',
+    notFound: 'Recurso no encontrado',
+    exerciseNotFound: 'Ejercicio no encontrado',
+    mealNotFound: 'Comida no encontrada',
+    templateNotFound: 'Plantilla no encontrada',
+    subscriptionNotFound: 'Suscripción no encontrada',
+    assignmentNotFound: 'Asignación no encontrada',
+    noActiveSubscription: 'No se encontró una suscripción activa',
   },
   roles: {
     customer: 'Cliente',

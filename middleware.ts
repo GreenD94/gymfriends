@@ -4,7 +4,7 @@ import { getSessionFromRequest } from '@/lib/auth-edge';
 import { getAllowedRoutes, getDashboardUrl, getLoginUrlByName } from '@/features/core/config/role.config';
 import { RoleName, getRoleId } from '@/features/core/constants/roles.constants';
 
-const publicRoutes = ['/login', '/register', '/admin/login', '/trainer/login'];
+const publicRoutes = ['/login', '/register', '/admin/login', '/trainer/login', '/blackbox'];
 
 function getLoginUrlForRoute(pathname: string): string {
   // Check if pathname starts with any of the role routes

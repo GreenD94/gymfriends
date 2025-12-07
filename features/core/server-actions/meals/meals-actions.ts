@@ -1,13 +1,14 @@
 'use server';
 
 import { z } from 'zod';
-import clientPromise, { getDatabaseName } from '@/lib/mongodb';
 import { 
   Meal, 
   CreateMealInput, 
   UpdateMealInput 
 } from '@/features/core/types/meal.types';
-import { ObjectId } from 'mongodb';
+import { TRANSLATIONS } from '@/features/core/constants/translations.constants';
+import { createDocument, getDocument, updateDocument, deleteDocument, listDocuments } from '@/features/core/utils/crud.utils';
+import { buildErrorResponse } from '@/features/core/utils/server-action-utils';
 
 const createMealSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -30,163 +31,54 @@ const updateMealSchema = z.object({
 });
 
 export async function createMealAction(input: CreateMealInput) {
-  try {
-    const validated = createMealSchema.parse(input);
-    
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    
-    const newMeal: Meal = {
-      ...validated,
-      createdAt: new Date(),
-    };
-
-    const result = await db.collection('meals').insertOne(newMeal);
-
-    return {
-      success: true,
-      meal: {
-        ...newMeal,
-        _id: result.insertedId.toString(),
-      },
-    };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return {
-        success: false,
-        error: error.errors[0].message,
-      };
-    }
-    console.error('Create meal error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  return createDocument<Meal>(
+    'meals',
+    input,
+    createMealSchema,
+    'meal'
+  );
 }
 
 export async function getMealAction(id: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    const meal = await db.collection<Meal>('meals').findOne({ 
-      _id: new ObjectId(id) 
-    });
-
-    if (!meal) {
-      return { success: false, error: 'Meal not found' };
-    }
-
-    return {
-      success: true,
-      meal: {
-        ...meal,
-        _id: meal._id.toString(),
-      },
-    };
-  } catch (error) {
-    console.error('Get meal error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
+  const result = await getDocument<Meal>('meals', id, 'meal');
+  // Map generic 'notFound' error to specific 'mealNotFound' error
+  if (!result.success && result.error === TRANSLATIONS.errors.notFound) {
+    return buildErrorResponse(TRANSLATIONS.errors.mealNotFound);
   }
+  return result;
 }
 
 export async function updateMealAction(id: string, input: UpdateMealInput) {
-  try {
-    const validated = updateMealSchema.parse(input);
-    
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    
-    const updateData: Partial<Meal> = {
-      ...validated,
-      updatedAt: new Date(),
-    };
-
-    const result = await db.collection('meals').updateOne(
-      { _id: new ObjectId(id) },
-      { $set: updateData }
-    );
-
-    if (result.matchedCount === 0) {
-      return { success: false, error: 'Meal not found' };
-    }
-
-    const updatedMeal = await db.collection<Meal>('meals').findOne({ 
-      _id: new ObjectId(id) 
-    });
-
-    return {
-      success: true,
-      meal: {
-        ...updatedMeal!,
-        _id: updatedMeal!._id.toString(),
-      },
-    };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return {
-        success: false,
-        error: error.errors[0].message,
-      };
-    }
-    console.error('Update meal error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
+  const result = await updateDocument<Meal>(
+    'meals',
+    id,
+    input,
+    updateMealSchema,
+    'meal'
+  );
+  // Map generic 'notFound' error to specific 'mealNotFound' error
+  if (!result.success && result.error === TRANSLATIONS.errors.notFound) {
+    return buildErrorResponse(TRANSLATIONS.errors.mealNotFound);
   }
+  return result;
 }
 
 export async function deleteMealAction(id: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    
-    const result = await db.collection('meals').deleteOne({ 
-      _id: new ObjectId(id) 
-    });
-
-    if (result.deletedCount === 0) {
-      return { success: false, error: 'Meal not found' };
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error('Delete meal error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
+  const result = await deleteDocument('meals', id, 'meal');
+  // Map generic 'notFound' error to specific 'mealNotFound' error
+  if (!result.success && result.error === TRANSLATIONS.errors.notFound) {
+    return buildErrorResponse(TRANSLATIONS.errors.mealNotFound);
   }
+  return result;
 }
 
 export async function listMealsAction(mealType?: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    
-    const query = mealType ? { mealType } : {};
-    const meals = await db.collection<Meal>('meals')
-      .find(query)
-      .sort({ name: 1 })
-      .toArray();
-
-    return {
-      success: true,
-      meals: meals.map(meal => ({
-        ...meal,
-        _id: meal._id.toString(),
-      })),
-    };
-  } catch (error) {
-    console.error('List meals error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  const query = mealType ? { mealType } : {};
+  return listDocuments<Meal>(
+    'meals',
+    query,
+    { name: 1 },
+    'meals'
+  );
 }
 

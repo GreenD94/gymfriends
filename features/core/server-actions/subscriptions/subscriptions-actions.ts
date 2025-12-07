@@ -1,14 +1,14 @@
 'use server';
 
 import { z } from 'zod';
-import clientPromise, { getDatabaseName } from '@/lib/mongodb';
 import { 
   Subscription, 
   CreateSubscriptionInput, 
   UpdateSubscriptionInput,
-  SubscriptionStatus 
 } from '@/features/core/types/subscription.types';
-import { ObjectId } from 'mongodb';
+import { TRANSLATIONS } from '@/features/core/constants/translations.constants';
+import { getDatabase, toApiResponse, toApiResponseArray, toObjectId } from '@/features/core/utils/database.utils';
+import { handleServerAction, buildErrorResponse } from '@/features/core/utils/server-action-utils';
 
 const createSubscriptionSchema = z.object({
   customerId: z.string().min(1, 'Customer ID is required'),
@@ -29,11 +29,9 @@ const updateSubscriptionSchema = z.object({
 });
 
 export async function createSubscriptionAction(input: CreateSubscriptionInput) {
-  try {
+  return handleServerAction(async () => {
     const validated = createSubscriptionSchema.parse(input);
-    
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+    const db = await getDatabase();
     
     const newSubscription: Subscription = {
       customerId: validated.customerId,
@@ -47,66 +45,49 @@ export async function createSubscriptionAction(input: CreateSubscriptionInput) {
     };
 
     const result = await db.collection('subscriptions').insertOne(newSubscription);
+    const subscription = toApiResponse({ ...newSubscription, _id: result.insertedId } as Subscription & { _id: any }, result.insertedId.toString());
+
+    if (!subscription) {
+      return buildErrorResponse(TRANSLATIONS.errors.genericError);
+    }
 
     return {
       success: true,
-      subscription: {
-        ...newSubscription,
-        _id: result.insertedId.toString(),
-      },
+      subscription,
     };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return {
-        success: false,
-        error: error.errors[0].message,
-      };
-    }
-    console.error('Create subscription error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Create subscription');
 }
 
 export async function getSubscriptionAction(id: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+  return handleServerAction(async () => {
+    const db = await getDatabase();
     const subscription = await db.collection<Subscription>('subscriptions').findOne({ 
-      _id: new ObjectId(id) 
+      _id: toObjectId(id) 
     });
 
     if (!subscription) {
-      return { success: false, error: 'Subscription not found' };
+      return buildErrorResponse(TRANSLATIONS.errors.subscriptionNotFound);
+    }
+
+    const response = toApiResponse(subscription, id);
+    if (!response) {
+      return buildErrorResponse(TRANSLATIONS.errors.subscriptionNotFound);
     }
 
     return {
       success: true,
-      subscription: {
-        ...subscription,
-        _id: subscription._id.toString(),
-      },
+      subscription: response,
     };
-  } catch (error) {
-    console.error('Get subscription error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Get subscription');
 }
 
 export async function updateSubscriptionAction(
   id: string, 
   input: UpdateSubscriptionInput
 ) {
-  try {
+  return handleServerAction(async () => {
     const validated = updateSubscriptionSchema.parse(input);
-    
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+    const db = await getDatabase();
     
     const updateData: Partial<Subscription> = {
       ...validated,
@@ -114,67 +95,53 @@ export async function updateSubscriptionAction(
     };
 
     const result = await db.collection('subscriptions').updateOne(
-      { _id: new ObjectId(id) },
+      { _id: toObjectId(id) },
       { $set: updateData }
     );
 
     if (result.matchedCount === 0) {
-      return { success: false, error: 'Subscription not found' };
+      return buildErrorResponse(TRANSLATIONS.errors.subscriptionNotFound);
     }
 
     const updatedSubscription = await db.collection<Subscription>('subscriptions').findOne({ 
-      _id: new ObjectId(id) 
+      _id: toObjectId(id) 
     });
+
+    if (!updatedSubscription) {
+      return buildErrorResponse(TRANSLATIONS.errors.subscriptionNotFound);
+    }
+
+    const response = toApiResponse(updatedSubscription, id);
+    if (!response) {
+      return buildErrorResponse(TRANSLATIONS.errors.subscriptionNotFound);
+    }
 
     return {
       success: true,
-      subscription: {
-        ...updatedSubscription!,
-        _id: updatedSubscription!._id.toString(),
-      },
+      subscription: response,
     };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return {
-        success: false,
-        error: error.errors[0].message,
-      };
-    }
-    console.error('Update subscription error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Update subscription');
 }
 
 export async function deleteSubscriptionAction(id: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+  return handleServerAction(async () => {
+    const db = await getDatabase();
     
     const result = await db.collection('subscriptions').deleteOne({ 
-      _id: new ObjectId(id) 
+      _id: toObjectId(id) 
     });
 
     if (result.deletedCount === 0) {
-      return { success: false, error: 'Subscription not found' };
+      return buildErrorResponse(TRANSLATIONS.errors.subscriptionNotFound);
     }
 
     return { success: true };
-  } catch (error) {
-    console.error('Delete subscription error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Delete subscription');
 }
 
 export async function listSubscriptionsAction(customerId?: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+  return handleServerAction(async () => {
+    const db = await getDatabase();
     
     const query = customerId ? { customerId } : {};
     const subscriptions = await db.collection<Subscription>('subscriptions')
@@ -184,24 +151,14 @@ export async function listSubscriptionsAction(customerId?: string) {
 
     return {
       success: true,
-      subscriptions: subscriptions.map(sub => ({
-        ...sub,
-        _id: sub._id.toString(),
-      })),
+      subscriptions: toApiResponseArray(subscriptions),
     };
-  } catch (error) {
-    console.error('List subscriptions error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'List subscriptions');
 }
 
 export async function getActiveSubscriptionAction(customerId: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+  return handleServerAction(async () => {
+    const db = await getDatabase();
     const subscription = await db.collection<Subscription>('subscriptions')
       .findOne({ 
         customerId,
@@ -211,22 +168,18 @@ export async function getActiveSubscriptionAction(customerId: string) {
       });
 
     if (!subscription) {
-      return { success: false, error: 'No active subscription found' };
+      return buildErrorResponse(TRANSLATIONS.errors.noActiveSubscription);
+    }
+
+    const response = toApiResponse(subscription);
+    if (!response) {
+      return buildErrorResponse(TRANSLATIONS.errors.noActiveSubscription);
     }
 
     return {
       success: true,
-      subscription: {
-        ...subscription,
-        _id: subscription._id.toString(),
-      },
+      subscription: response,
     };
-  } catch (error) {
-    console.error('Get active subscription error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Get active subscription');
 }
 

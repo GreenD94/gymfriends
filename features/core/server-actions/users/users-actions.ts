@@ -1,19 +1,20 @@
 'use server';
 
 import { z } from 'zod';
-import bcrypt from 'bcryptjs';
-import clientPromise, { getDatabaseName } from '@/lib/mongodb';
 import { 
-  User, 
-  UserDb,
-  CreateUserInput, 
-  UpdateUserInput,
-  UserRole 
+  CreateUserPayload, 
+  UpdateUserPayload,
+  UserDocument,
 } from '@/features/core/types/user.types';
-import { ObjectId } from 'mongodb';
-import { getRoleId, ALL_ROLE_NAMES } from '@/features/core/constants/roles.constants';
-import { userFromDb, userToDb } from '@/features/core/utils/role.utils';
+import { getRoleId, ALL_ROLE_NAMES, RoleName } from '@/features/core/constants/roles.constants';
+import { userToDb } from '@/features/core/utils/role.utils';
 import { TRANSLATIONS } from '@/features/core/constants/translations.constants';
+import { getDatabase, toObjectId } from '@/features/core/utils/database.utils';
+import { handleServerAction, buildErrorResponse } from '@/features/core/utils/server-action-utils';
+import { hashPassword } from '@/features/core/utils/password.utils';
+import { checkUserExistsByEmail, convertUserToResponse } from '@/features/core/utils/user.utils';
+import { userORM } from '@/features/core/orm';
+import { apiResponse } from '@/features/core/utils/api-response.utils';
 
 const createUserSchema = z.object({
   email: z.string().email(TRANSLATIONS.validation.invalidEmailFormat),
@@ -31,217 +32,124 @@ const updateUserSchema = z.object({
   role: z.enum(ALL_ROLE_NAMES as [string, ...string[]]).optional(),
 });
 
-export async function createUserAction(input: CreateUserInput) {
-  try {
+export async function createUserAction(input: CreateUserPayload) {
+  return handleServerAction(async () => {
     const validated = createUserSchema.parse(input);
     
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    
-    // Check if user already exists
-    const existingUser = await db.collection('users').findOne({ 
-      email: validated.email 
-    });
-
-    if (existingUser) {
-      return {
-        success: false,
-        error: TRANSLATIONS.errors.userExists,
-      };
+    const userExists = await checkUserExistsByEmail(validated.email);
+    if (userExists) {
+      return buildErrorResponse(TRANSLATIONS.errors.userExists);
     }
 
-    // Hash password if provided
     let hashedPassword: string | undefined;
     if (validated.password) {
-      hashedPassword = await bcrypt.hash(validated.password, 10);
+      hashedPassword = await hashPassword(validated.password);
     }
 
-    // Convert UI input (with role name) to database format (with roleId)
     const userForDb = userToDb({
       email: validated.email,
       password: hashedPassword,
       name: validated.name,
-      role: validated.role,
+      role: validated.role as RoleName,
       phone: validated.phone,
       instagram: validated.instagram,
       createdAt: new Date(),
     });
 
+    const db = await getDatabase();
     const result = await db.collection('users').insertOne(userForDb);
 
-    // Convert back to UI format for response
-    const userDb = { ...userForDb, _id: result.insertedId.toString() } as UserDb;
-    const user = userFromDb(userDb);
-    const { password: _, ...userWithoutPassword } = user;
+    const userDb: UserDocument = {
+      _id: result.insertedId.toString(),
+      email: userForDb.email,
+      password: userForDb.password,
+      name: userForDb.name,
+      roleId: userForDb.roleId,
+      phone: userForDb.phone,
+      instagram: userForDb.instagram,
+      createdAt: userForDb.createdAt,
+    };
+    
+    const userWithoutPassword = convertUserToResponse(userDb);
 
     return {
       success: true,
       user: userWithoutPassword,
     };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return {
-        success: false,
-        error: error.errors[0].message,
-      };
-    }
-    console.error('Create user error:', error);
-    return {
-      success: false,
-      error: TRANSLATIONS.errors.genericError,
-    };
-  }
+  }, 'Create user');
 }
 
-export async function getUserAction(id: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    const userDb = await db.collection<UserDb>('users').findOne({ 
-      _id: new ObjectId(id) 
-    }) as UserDb | null;
 
-    if (!userDb) {
-      return { success: false, error: TRANSLATIONS.errors.userNotFound };
-    }
-
-    // Convert database user to UI user
-    const user = userFromDb(userDb);
-    const { password: _, ...userWithoutPassword } = user;
-
-    return {
-      success: true,
-      user: {
-        ...userWithoutPassword,
-        _id: userDb._id?.toString() || id,
-      },
-    };
-  } catch (error) {
-    console.error('Get user error:', error);
-    return {
-      success: false,
-      error: TRANSLATIONS.errors.genericError,
-    };
-  }
-}
-
-export async function updateUserAction(id: string, input: UpdateUserInput) {
-  try {
+export async function updateUserAction(id: string, input: UpdateUserPayload) {
+  return handleServerAction(async () => {
     const validated = updateUserSchema.parse(input);
+    const db = await getDatabase();
     
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    
-    // Convert role name to roleId if role is being updated
-    const updateData: Partial<UserDb> = {
-      ...validated,
+    const updateData: Partial<UserDocument> = {
       updatedAt: new Date(),
     };
 
-    // If role is being updated, convert to roleId
+    if (validated.name !== undefined) updateData.name = validated.name;
+    if (validated.phone !== undefined) updateData.phone = validated.phone;
+    if (validated.instagram !== undefined) updateData.instagram = validated.instagram;
+
     if (validated.role) {
-      updateData.roleId = getRoleId(validated.role);
-      delete (updateData as any).role; // Remove role name, we only store roleId
+      updateData.roleId = getRoleId(validated.role as RoleName);
     }
 
     const result = await db.collection('users').updateOne(
-      { _id: new ObjectId(id) },
+      { _id: toObjectId(id) },
       { $set: updateData }
     );
 
     if (result.matchedCount === 0) {
-      return { success: false, error: TRANSLATIONS.errors.userNotFound };
+      return buildErrorResponse(TRANSLATIONS.errors.userNotFound);
     }
 
-    // Fetch updated user and convert to UI format
-    const updatedUserDb = await db.collection<UserDb>('users').findOne({ 
-      _id: new ObjectId(id) 
-    }) as UserDb | null;
+    const resultList = await userORM({
+      query: { _id: id },
+    });
 
-    if (!updatedUserDb) {
-      return { success: false, error: TRANSLATIONS.errors.userNotFoundAfterUpdate };
+    if (resultList.collection.length === 0) {
+      return buildErrorResponse(TRANSLATIONS.errors.userNotFoundAfterUpdate);
     }
 
-    const user = userFromDb(updatedUserDb);
-    const { password: _, ...userWithoutPassword } = user;
+    const updatedUserDb = resultList.collection[0];
+    const userWithoutPassword = convertUserToResponse(updatedUserDb);
 
     return {
       success: true,
-      user: {
-        ...userWithoutPassword,
-        _id: updatedUserDb._id?.toString() || id,
-      },
+      user: userWithoutPassword,
     };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return {
-        success: false,
-        error: error.errors[0].message,
-      };
-    }
-    console.error('Update user error:', error);
-    return {
-      success: false,
-      error: TRANSLATIONS.errors.genericError,
-    };
-  }
+  }, 'Update user');
 }
 
 export async function deleteUserAction(id: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+  return handleServerAction(async () => {
+    const db = await getDatabase();
     
     const result = await db.collection('users').deleteOne({ 
-      _id: new ObjectId(id) 
+      _id: toObjectId(id) 
     });
 
     if (result.deletedCount === 0) {
-      return { success: false, error: TRANSLATIONS.errors.userNotFound };
+      return buildErrorResponse(TRANSLATIONS.errors.userNotFound);
     }
 
     return { success: true };
-  } catch (error) {
-    console.error('Delete user error:', error);
-    return {
-      success: false,
-      error: TRANSLATIONS.errors.genericError,
-    };
-  }
+  }, 'Delete user');
 }
 
-export async function listUsersAction(role?: UserRole) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    
-    // Convert role name to roleId for query if role is provided
-    const query = role ? { roleId: getRoleId(role) } : {};
-    const usersDb = await db.collection<UserDb>('users')
-      .find(query)
-      .sort({ createdAt: -1 })
-      .toArray() as UserDb[];
+export async function listUsersAction(page?: number, limit?: number, _id?: string) {
+  const query: Record<string, unknown> = {_id};
 
-    // Convert all database users to UI format
-    const users = usersDb.map(userDb => {
-      const user = userFromDb(userDb);
-      const { password: _, ...userWithoutPassword } = user;
-      return {
-        ...userWithoutPassword,
-        _id: userDb._id?.toString() || '',
-      };
-    });
+  const result = await userORM({
+    query,
+    sort: { createdAt: -1 },
+    page,
+    pageSize: limit,
+  });
 
-    return {
-      success: true,
-      users,
-    };
-  } catch (error) {
-    console.error('List users error:', error);
-    return {
-      success: false,
-      error: TRANSLATIONS.errors.genericError,
-    };
-  }
+  return apiResponse(result);
 }
 

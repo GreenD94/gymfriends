@@ -1,20 +1,25 @@
 'use server';
 
 import { z } from 'zod';
-import clientPromise, { getDatabaseName } from '@/lib/mongodb';
 import { 
   DailyAssignment, 
   CreateDailyAssignmentInput, 
   UpdateDailyAssignmentInput,
   WeeklyAssignmentInput,
 } from '@/features/core/types/daily-assignment.types';
-import { ObjectId } from 'mongodb';
+import { TRANSLATIONS } from '@/features/core/constants/translations.constants';
+import { getDatabase, toApiResponse, toApiResponseArray, toObjectId } from '@/features/core/utils/database.utils';
+import { handleServerAction, buildErrorResponse } from '@/features/core/utils/server-action-utils';
+import { buildDateRangeQuery, calculateWeekEnd } from '@/features/core/utils/date.utils';
 
+// Note: z.any() is used here for flexible meal/exercise data structures
+// that can vary in shape. This allows assignments to store different types
+// of meal and exercise data without strict typing constraints.
 const createDailyAssignmentSchema = z.object({
   customerId: z.string().min(1, 'Customer ID is required'),
   date: z.coerce.date(),
-  meals: z.array(z.any()),
-  exercises: z.array(z.any()),
+  meals: z.array(z.any()), // Flexible meal data structure
+  exercises: z.array(z.any()), // Flexible exercise data structure
   assignedBy: z.string().min(1, 'Assigned by is required'),
 });
 
@@ -23,21 +28,19 @@ const weeklyAssignmentSchema = z.object({
   startDate: z.coerce.date(),
   meals: z.array(z.object({
     day: z.number().min(0).max(6),
-    meals: z.array(z.any()),
+    meals: z.array(z.any()), // Flexible meal data structure
   })),
   exercises: z.array(z.object({
     day: z.number().min(0).max(6),
-    exercises: z.array(z.any()),
+    exercises: z.array(z.any()), // Flexible exercise data structure
   })),
   assignedBy: z.string().min(1, 'Assigned by is required'),
 });
 
 export async function createDailyAssignmentAction(input: CreateDailyAssignmentInput) {
-  try {
+  return handleServerAction(async () => {
     const validated = createDailyAssignmentSchema.parse(input);
-    
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+    const db = await getDatabase();
     
     const newAssignment: DailyAssignment = {
       ...validated,
@@ -45,35 +48,23 @@ export async function createDailyAssignmentAction(input: CreateDailyAssignmentIn
     };
 
     const result = await db.collection('dailyAssignments').insertOne(newAssignment);
+    const assignment = toApiResponse({ ...newAssignment, _id: result.insertedId } as DailyAssignment & { _id: any }, result.insertedId.toString());
+
+    if (!assignment) {
+      return buildErrorResponse(TRANSLATIONS.errors.genericError);
+    }
 
     return {
       success: true,
-      assignment: {
-        ...newAssignment,
-        _id: result.insertedId.toString(),
-      },
+      assignment,
     };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return {
-        success: false,
-        error: error.errors[0].message,
-      };
-    }
-    console.error('Create daily assignment error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Create daily assignment');
 }
 
 export async function createWeeklyAssignmentsAction(input: WeeklyAssignmentInput) {
-  try {
+  return handleServerAction(async () => {
     const validated = weeklyAssignmentSchema.parse(input);
-    
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+    const db = await getDatabase();
     
     // Create assignments for each day of the week
     const assignments: DailyAssignment[] = [];
@@ -100,63 +91,44 @@ export async function createWeeklyAssignmentsAction(input: WeeklyAssignmentInput
 
     return {
       success: true,
-      assignments: Object.values(result.insertedIds).map((id, index) => ({
-        ...assignments[index],
-        _id: id.toString(),
-      })),
+      assignments: Object.values(result.insertedIds).map((id, index) => {
+        const assignment = toApiResponse({ ...assignments[index], _id: id } as DailyAssignment & { _id: any }, id.toString());
+        return assignment || { ...assignments[index], _id: id.toString() };
+      }),
     };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return {
-        success: false,
-        error: error.errors[0].message,
-      };
-    }
-    console.error('Create weekly assignments error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Create weekly assignments');
 }
 
 export async function getDailyAssignmentAction(id: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+  return handleServerAction(async () => {
+    const db = await getDatabase();
     const assignment = await db.collection<DailyAssignment>('dailyAssignments').findOne({ 
-      _id: new ObjectId(id) 
+      _id: toObjectId(id) 
     });
 
     if (!assignment) {
-      return { success: false, error: 'Assignment not found' };
+      return buildErrorResponse(TRANSLATIONS.errors.assignmentNotFound);
+    }
+
+    const response = toApiResponse(assignment, id);
+    if (!response) {
+      return buildErrorResponse(TRANSLATIONS.errors.assignmentNotFound);
     }
 
     return {
       success: true,
-      assignment: {
-        ...assignment,
-        _id: assignment._id.toString(),
-      },
+      assignment: response,
     };
-  } catch (error) {
-    console.error('Get daily assignment error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Get daily assignment');
 }
 
 export async function updateDailyAssignmentAction(
   id: string, 
   input: UpdateDailyAssignmentInput
 ) {
-  try {
+  return handleServerAction(async () => {
     const validated = createDailyAssignmentSchema.partial().parse(input);
-    
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+    const db = await getDatabase();
     
     const updateData: Partial<DailyAssignment> = {
       ...validated,
@@ -164,81 +136,62 @@ export async function updateDailyAssignmentAction(
     };
 
     const result = await db.collection('dailyAssignments').updateOne(
-      { _id: new ObjectId(id) },
+      { _id: toObjectId(id) },
       { $set: updateData }
     );
 
     if (result.matchedCount === 0) {
-      return { success: false, error: 'Assignment not found' };
+      return buildErrorResponse(TRANSLATIONS.errors.assignmentNotFound);
     }
 
     const updatedAssignment = await db.collection<DailyAssignment>('dailyAssignments').findOne({ 
-      _id: new ObjectId(id) 
+      _id: toObjectId(id) 
     });
+
+    if (!updatedAssignment) {
+      return buildErrorResponse(TRANSLATIONS.errors.assignmentNotFound);
+    }
+
+    const response = toApiResponse(updatedAssignment, id);
+    if (!response) {
+      return buildErrorResponse(TRANSLATIONS.errors.assignmentNotFound);
+    }
 
     return {
       success: true,
-      assignment: {
-        ...updatedAssignment!,
-        _id: updatedAssignment!._id.toString(),
-      },
+      assignment: response,
     };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return {
-        success: false,
-        error: error.errors[0].message,
-      };
-    }
-    console.error('Update daily assignment error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Update daily assignment');
 }
 
 export async function deleteDailyAssignmentAction(id: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+  return handleServerAction(async () => {
+    const db = await getDatabase();
     
     const result = await db.collection('dailyAssignments').deleteOne({ 
-      _id: new ObjectId(id) 
+      _id: toObjectId(id) 
     });
 
     if (result.deletedCount === 0) {
-      return { success: false, error: 'Assignment not found' };
+      return buildErrorResponse(TRANSLATIONS.errors.assignmentNotFound);
     }
 
     return { success: true };
-  } catch (error) {
-    console.error('Delete daily assignment error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Delete daily assignment');
 }
 
 export async function listDailyAssignmentsAction(customerId?: string, startDate?: Date, endDate?: Date) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+  return handleServerAction(async () => {
+    const db = await getDatabase();
     
-    const query: any = {};
+    const query: Record<string, any> = {};
     if (customerId) {
       query.customerId = customerId;
     }
-    if (startDate || endDate) {
-      query.date = {};
-      if (startDate) {
-        query.date.$gte = startDate;
-      }
-      if (endDate) {
-        query.date.$lte = endDate;
-      }
-    }
+    
+    // Use date utility to build date range query
+    const dateRangeQuery = buildDateRangeQuery(startDate, endDate);
+    Object.assign(query, dateRangeQuery);
     
     const assignments = await db.collection<DailyAssignment>('dailyAssignments')
       .find(query)
@@ -247,27 +200,17 @@ export async function listDailyAssignmentsAction(customerId?: string, startDate?
 
     return {
       success: true,
-      assignments: assignments.map(assignment => ({
-        ...assignment,
-        _id: assignment._id.toString(),
-      })),
+      assignments: toApiResponseArray(assignments),
     };
-  } catch (error) {
-    console.error('List daily assignments error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'List daily assignments');
 }
 
 export async function getWeeklyAssignmentsAction(customerId: string, weekStart: Date) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+  return handleServerAction(async () => {
+    const db = await getDatabase();
     
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
+    // Use date utility to calculate week end
+    const weekEnd = calculateWeekEnd(weekStart);
     
     const assignments = await db.collection<DailyAssignment>('dailyAssignments')
       .find({
@@ -282,17 +225,8 @@ export async function getWeeklyAssignmentsAction(customerId: string, weekStart: 
 
     return {
       success: true,
-      assignments: assignments.map(assignment => ({
-        ...assignment,
-        _id: assignment._id.toString(),
-      })),
+      assignments: toApiResponseArray(assignments),
     };
-  } catch (error) {
-    console.error('Get weekly assignments error:', error);
-    return {
-      success: false,
-      error: 'An error occurred',
-    };
-  }
+  }, 'Get weekly assignments');
 }
 

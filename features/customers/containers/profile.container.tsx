@@ -1,53 +1,40 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { useSession } from '@/features/core/hooks/use-session.hook';
-import { getUserAction } from '@/features/core/server-actions/users/users-actions';
-import { updateUserAction } from '@/features/core/server-actions/users/users-actions';
+import { useUsersList, useUsersMutations } from '@/features/core/hooks/use-users.hook';
 import { ProfileForm } from '../components/profile-form.component';
 
 export function ProfileContainer() {
   const { user } = useSession();
-  const [userData, setUserData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  
+  // Fetch single user using listUsersAction with userId filter
+  const { users, isLoading } = useUsersList({
+    userId: user?.id,
+    queryKeyPrefix: 'profile-user',
+  });
+  
+  // Get mutations without triggering list fetch
+  const { updateMutation } = useUsersMutations('profile-user');
 
-  useEffect(() => {
-    if (user?.id) {
-      loadUser();
-    }
-  }, [user]);
-
-  const loadUser = async () => {
-    if (!user?.id) return;
-
-    try {
-      const result = await getUserAction(user.id);
-      if (result.success) {
-        setUserData(result.user);
-      }
-    } catch (error) {
-      console.error('Error loading user:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const userData = users && users.length > 0 ? users[0] : null;
 
   const handleUpdate = async (data: { phone?: string; instagram?: string }) => {
     if (!user?.id) return;
 
-    try {
-      const result = await updateUserAction(user.id, data);
-      if (result.success) {
-        setUserData(result.user);
-        alert('Profile updated successfully!');
+    updateMutation.mutate(
+      { id: user.id, data },
+      {
+        onSuccess: () => {
+          alert('Profile updated successfully!');
+        },
+        onError: () => {
+          alert('Failed to update profile');
+        },
       }
-    } catch (error) {
-      console.error('Error updating profile:', error);
-      alert('Failed to update profile');
-    }
+    );
   };
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-lg text-gray-600">Loading...</div>

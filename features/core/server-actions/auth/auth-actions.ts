@@ -1,12 +1,14 @@
 'use server';
 
-import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import clientPromise, { getDatabaseName } from '@/lib/mongodb';
-import { User, UserDb, CreateUserInput } from '@/features/core/types/user.types';
-import { RoleId, getRoleId, getRoleName, ALL_ROLE_NAMES } from '@/features/core/constants/roles.constants';
-import { userFromDb, userToDb } from '@/features/core/utils/role.utils';
+import { UserDb, CreateUserInput } from '@/features/core/types/user.types';
+import { RoleId, RoleName, ALL_ROLE_NAMES } from '@/features/core/constants/roles.constants';
+import { userToDb } from '@/features/core/utils/role.utils';
 import { TRANSLATIONS } from '@/features/core/constants/translations.constants';
+import { getDatabase, toApiResponse } from '@/features/core/utils/database.utils';
+import { handleServerAction, buildErrorResponse } from '@/features/core/utils/server-action-utils';
+import { hashPassword, comparePassword } from '@/features/core/utils/password.utils';
+import { checkUserExistsByEmail, convertUserToResponse, getUserByEmailOrFail } from '@/features/core/utils/user.utils';
 
 const loginSchema = z.object({
   email: z.string().email(TRANSLATIONS.validation.invalidEmailFormat),
@@ -23,138 +25,90 @@ const registerSchema = z.object({
 });
 
 export async function loginAction(email: string, password: string) {
-  try {
+  return handleServerAction(async () => {
     const validated = loginSchema.parse({ email, password });
     
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    const userDb = await db.collection<UserDb>('users').findOne({ 
-      email: validated.email 
-    }) as UserDb | null;
+    try {
+      const userDb = await getUserByEmailOrFail(validated.email);
+      
+      if (!userDb.password) {
+        return buildErrorResponse(TRANSLATIONS.errors.invalidEmailOrPassword);
+      }
 
-    if (!userDb || !userDb.password) {
-      return { 
-        success: false, 
-        error: TRANSLATIONS.errors.invalidEmailOrPassword 
-      };
-    }
+      const isValid = await comparePassword(validated.password, userDb.password);
+      
+      if (!isValid) {
+        return buildErrorResponse(TRANSLATIONS.errors.invalidEmailOrPassword);
+      }
 
-    const isValid = await bcrypt.compare(validated.password, userDb.password);
-    
-    if (!isValid) {
-      return { 
-        success: false, 
-        error: TRANSLATIONS.errors.invalidEmailOrPassword 
-      };
-    }
+      const userWithoutPassword = convertUserToResponse(userDb);
 
-    // Convert database user to UI user (adds role name from roleId)
-    const user = userFromDb(userDb);
-    const { password: _, ...userWithoutPassword } = user;
-
-    return {
-      success: true,
-      user: userWithoutPassword,
-    };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
       return {
-        success: false,
-        error: error.errors[0].message,
+        success: true,
+        user: userWithoutPassword,
       };
+    } catch (error) {
+      return buildErrorResponse(TRANSLATIONS.errors.invalidEmailOrPassword);
     }
-    console.error('Login error:', error);
-    return {
-      success: false,
-      error: TRANSLATIONS.errors.loginError,
-    };
-  }
+  }, 'Login');
 }
 
 export async function registerAction(input: CreateUserInput) {
-  try {
+  return handleServerAction(async () => {
     const validated = registerSchema.parse(input);
     
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    
     // Check if user already exists
-    const existingUser = await db.collection('users').findOne({ 
-      email: validated.email 
-    });
-
-    if (existingUser) {
-      return {
-        success: false,
-        error: TRANSLATIONS.errors.userExists,
-      };
+    const userExists = await checkUserExistsByEmail(validated.email);
+    if (userExists) {
+      return buildErrorResponse(TRANSLATIONS.errors.userExists);
     }
 
     // Hash password
-    const hashedPassword = await bcrypt.hash(validated.password!, 10);
+    const hashedPassword = await hashPassword(validated.password!);
 
     // Convert UI input (with role name) to database format (with roleId)
     const userForDb = userToDb({
       email: validated.email,
       password: hashedPassword,
       name: validated.name,
-      role: validated.role,
+      role: validated.role as RoleName,
       phone: validated.phone,
       instagram: validated.instagram,
       createdAt: new Date(),
     });
 
+    const db = await getDatabase();
     const result = await db.collection('users').insertOne(userForDb);
 
     // Convert back to UI format for response
-    const userDb = { ...userForDb, _id: result.insertedId.toString() } as UserDb;
-    const user = userFromDb(userDb);
-    const { password: _, ...userWithoutPassword } = user;
+    const userDb = toApiResponse({ ...userForDb, _id: result.insertedId } as UserDb & { _id: any }, result.insertedId.toString());
+    if (!userDb) {
+      return buildErrorResponse(TRANSLATIONS.errors.genericError);
+    }
+    
+    const userWithoutPassword = convertUserToResponse(userDb);
 
     return {
       success: true,
       user: userWithoutPassword,
     };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return {
-        success: false,
-        error: error.errors[0].message,
-      };
-    }
-    console.error('Register error:', error);
-    return {
-      success: false,
-      error: TRANSLATIONS.errors.registerError,
-    };
-  }
+  }, 'Register');
 }
 
 export async function getUserByEmailAction(email: string) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
-    const userDb = await db.collection<UserDb>('users').findOne({ email }) as UserDb | null;
+  return handleServerAction(async () => {
+    try {
+      const userDb = await getUserByEmailOrFail(email);
+      const userWithoutPassword = convertUserToResponse(userDb);
 
-    if (!userDb) {
-      return { success: false, error: TRANSLATIONS.errors.userNotFound };
+      return {
+        success: true,
+        user: userWithoutPassword,
+      };
+    } catch (error) {
+      return buildErrorResponse(TRANSLATIONS.errors.userNotFound);
     }
-
-    // Convert database user to UI user
-    const user = userFromDb(userDb);
-    const { password: _, ...userWithoutPassword } = user;
-
-    return {
-      success: true,
-      user: userWithoutPassword,
-    };
-  } catch (error) {
-    console.error('Get user error:', error);
-    return {
-      success: false,
-      error: TRANSLATIONS.errors.genericError,
-    };
-  }
+  }, 'Get user by email');
 }
 
 export async function createOrUpdateOAuthUserAction(
@@ -162,9 +116,8 @@ export async function createOrUpdateOAuthUserAction(
   name: string,
   image?: string
 ) {
-  try {
-    const client = await clientPromise;
-    const db = client.db(getDatabaseName());
+  return handleServerAction(async () => {
+    const db = await getDatabase();
     
     const existingUserDb = await db.collection<UserDb>('users').findOne({ email }) as UserDb | null;
 
@@ -175,8 +128,7 @@ export async function createOrUpdateOAuthUserAction(
         { $set: { updatedAt: new Date() } }
       );
       // Convert to UI format
-      const user = userFromDb(existingUserDb);
-      const { password: _, ...userWithoutPassword } = user;
+      const userWithoutPassword = convertUserToResponse(existingUserDb);
       return {
         success: true,
         user: userWithoutPassword,
@@ -185,7 +137,7 @@ export async function createOrUpdateOAuthUserAction(
     }
 
     // Create new user with default role as customer (using roleId)
-    const newUserDb: UserDb = {
+    const newUserDb: Omit<UserDb, '_id'> = {
       email,
       name,
       roleId: RoleId.CUSTOMER,
@@ -195,21 +147,18 @@ export async function createOrUpdateOAuthUserAction(
     const result = await db.collection('users').insertOne(newUserDb);
     
     // Convert to UI format for response
-    const userDb = { ...newUserDb, _id: result.insertedId.toString() } as UserDb;
-    const user = userFromDb(userDb);
-    const { password: _, ...userWithoutPassword } = user;
+    const userDb = toApiResponse({ ...newUserDb, _id: result.insertedId } as UserDb & { _id: any }, result.insertedId.toString());
+    if (!userDb) {
+      return buildErrorResponse(TRANSLATIONS.errors.genericError);
+    }
+    
+    const userWithoutPassword = convertUserToResponse(userDb);
 
     return {
       success: true,
       user: userWithoutPassword,
       isNew: true,
     };
-  } catch (error) {
-    console.error('OAuth user creation error:', error);
-    return {
-      success: false,
-      error: TRANSLATIONS.errors.genericError,
-    };
-  }
+  }, 'Create or update OAuth user');
 }
 
